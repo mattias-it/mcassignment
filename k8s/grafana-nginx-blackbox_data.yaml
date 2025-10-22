@@ -1,0 +1,23 @@
+# k8s/prometheus-additional-scrape.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-additional-scrape-configs
+  namespace: monitoring
+data:
+  blackbox.yaml: |
+    - job_name: 'blackbox'
+      metrics_path: /probe
+      params:
+        module: [http_2xx]
+      static_configs:
+        - targets:
+          - http://nginx-service.default.svc.cluster.local
+          - http://aa2ee7bea12b94e57b4b4c5d3d9eb156-1346605758.eu-north-1.elb.amazonaws.com/
+      relabel_configs:
+        - source_labels: [__address__]
+          target_label: __param_target
+        - source_labels: [__param_target]
+          target_label: instance
+        - target_label: __address__
+          replacement: blackbox-prometheus-blackbox-exporter.monitoring.svc.cluster.local:9115
