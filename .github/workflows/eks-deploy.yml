@@ -43,7 +43,7 @@ jobs:
         if: ${{ steps.changes.outputs.tf == 'true' }}
         uses: hashicorp/setup-terraform@v2
         with:
-          terraform_version: '1.5.7'
+          terraform_version: 'latest'
 
       - name: Terraform init
         if: ${{ steps.changes.outputs.tf == 'true' }}
@@ -67,7 +67,7 @@ jobs:
         if: ${{ steps.changes.outputs.k8s == 'true' }}
         uses: azure/setup-kubectl@v3
         with:
-          version: '1.27.3'
+          version: 'latest'
 
       - name: Update kubeconfig for EKS cluster
         if: ${{ steps.changes.outputs.k8s == 'true' }}
