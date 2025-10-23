@@ -39,6 +39,7 @@ jobs:
 
       # Fallback to static AWS keys if no role is provided
       - name: Configure AWS credentials (static keys)
+        if: ${{ secrets.AWS_ROLE_TO_ASSUME == '' }}
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
