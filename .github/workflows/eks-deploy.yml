@@ -1,8 +1,13 @@
-name: eks-deploy
+name: terraform-then-eks-deploy
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
   workflow_dispatch:
+
+env:
+  TF_DIR: iac
+  K8S_DIR: k8s
 
 jobs:
   deploy:
@@ -12,48 +17,80 @@ jobs:
       id-token: write
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - name: Detect changed files
+        id: changes
+        uses: dorny/paths-filter@v2
+        with:
+          filters: |
+            tf:
+              - 'iac/**'
+            k8s:
+              - 'k8s/**'
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      # static AWS keys
+      - name: Configure AWS credentials (static keys)
+        if: ${{ secrets.AWS_ROLE_TO_ASSUME == '' }}
+        uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: eu-north-1
+          aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Terraform init/plan/apply
-        working-directory: infra
-        run: |
-          terraform init
-          terraform plan -out tfplan
-          terraform apply -auto-approve tfplan
+      # === Terraform: only when iac/ changed ===
+      - name: Setup Terraform CLI
+        if: ${{ steps.changes.outputs.tf == 'true' }}
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: '1.5.7'
 
-      - name: Install kubectl and helm
-        run: |
-          sudo curl -L https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl -o /usr/local/bin/kubectl
-          sudo chmod +x /usr/local/bin/kubectl
-          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      - name: Terraform init
+        if: ${{ steps.changes.outputs.tf == 'true' }}
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init -input=false
 
-      - name: Update kubeconfig
+      - name: Terraform validate and plan
+        if: ${{ steps.changes.outputs.tf == 'true' }}
+        working-directory: ${{ env.TF_DIR }}
         run: |
-          CLUSTER_NAME=$(terraform -chdir=infra output -raw cluster_name)
-          aws eks update-kubeconfig --region eu-north-1 --name "$CLUSTER_NAME"
+          terraform validate
+          terraform plan -out=tfplan -input=false
 
-      - name: Deploy app manifests
-        run: |
-          kubectl apply -f k8s/namespace.yaml
-          kubectl apply -f k8s/deployment.yaml
-          kubectl apply -f k8s/service.yaml
-          kubectl apply -f k8s/hpa.yaml
+      - name: Terraform apply
+        if: ${{ steps.changes.outputs.tf == 'true' }}
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform apply -auto-approve -input=false tfplan
 
-      - name: Install kube-prometheus-stack (observability)
+      # === Kubernetes deploy: only when k8s/ changed ===
+      - name: Install kubectl
+        if: ${{ steps.changes.outputs.k8s == 'true' }}
+        uses: azure/setup-kubectl@v3
+        with:
+          version: '1.27.3'
+
+      - name: Update kubeconfig for EKS cluster
+        if: ${{ steps.changes.outputs.k8s == 'true' }}
         run: |
-          kubectl create namespace monitoring || true
-          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-          helm repo update
-          helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
-            -n monitoring -f observability/values-kube-prometheus-stack.yaml
+          aws eks update-kubeconfig --region "${{ secrets.AWS_REGION }}" --name "${{ secrets.EKS_CLUSTER_NAME }}"
+
+      - name: Apply selected Kubernetes manifests (nginx + loadbalancer)
+        if: ${{ steps.changes.outputs.k8s == 'true' }}
+        working-directory: ${{ env.K8S_DIR }}
+        run: |
+          kubectl apply -f nginx.yaml -f loadbalancer.yaml
+
+      - name: Wait for nginx rollout (best-effort)
+        if: ${{ steps.changes.outputs.k8s == 'true' }}
+        run: |
+          kubectl rollout status deployment/nginx --timeout=180s || echo "nginx deployment not found or rollout timed out; continuing."
+
+      - name: List applied resources (diagnostics)
+        if: ${{ steps.changes.outputs.k8s == 'true' }}
+        run: |
+          echo "=== Services ==="
+          kubectl get svc --selector='app=nginx' -o wide || true
+          echo
+          echo "=== Deployments ==="
+          kubectl get deploy --selector='app=nginx' -o wide || true
