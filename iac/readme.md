@@ -24,3 +24,7 @@
 	- Uses `terraform-aws-modules/eks/aws` module to provision the cluster and managed node groups.
 - output.tf
   - Exposes outputs needed locally, like kubeconfig, cluster endpoint/CA, node group details.
+
+
+## Consideration on single source of truth 
+Terraform relies on state files to discern its awareness over the platform it deployed. The current method, with a local machine and this workflow, isn't sustainable without a third party storing the state files, as in S3+DynamoDB. 
